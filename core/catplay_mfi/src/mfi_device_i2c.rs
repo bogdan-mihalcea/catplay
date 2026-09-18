@@ -18,16 +18,12 @@ const DEADLINE: Duration = Duration::from_secs(2);
 // the expected 908-byte length 3/3 times.
 const SELECTOR_READ_DELAY: Duration = Duration::from_millis(4);
 
-/// True only on the Carlinkit Mini Ultra, whose device tree model names the
-/// board. Other targets keep the upstream combined transfer unchanged.
-fn mini_ultra_selector_delay() -> bool {
-    ["/proc/device-tree/model", "/sys/firmware/devicetree/base/model"]
-        .iter()
-        .find_map(|path| std::fs::read(path).ok())
-        .is_some_and(|bytes| {
-            let model = String::from_utf8_lossy(&bytes);
-            model.trim_end_matches('\0').trim().contains("Carlinkit Mini Ultra")
-        })
+/// The firmware generates `[mfi.i2c]` per platform: the Ingenic/Mini Ultra
+/// uses bus 0 / address 0x10 while Imx and V821 use bus 1 / address 0x11.
+/// Scope the empirical STOP + delay path to the former; other targets keep the
+/// upstream combined transfer.
+fn split_selector_for(bus_offset: u32, dev_addr: u8) -> bool {
+    bus_offset == 0 && dev_addr == 0x10
 }
 
 #[repr(C)]
@@ -194,7 +190,7 @@ impl MfiDeviceI2C {
             device: Mutex::new(i2c_device),
             // bus_offset,
             dev_addr,
-            split_selector: mini_ultra_selector_delay(),
+            split_selector: split_selector_for(bus_offset, dev_addr),
             certificate: Mutex::new(Vec::new()),
         };
 
@@ -400,6 +396,14 @@ mod tests {
             .unwrap_err();
             assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
         }
+    }
+
+    #[test]
+    fn selector_delay_is_scoped_to_ingenic_config() {
+        assert!(split_selector_for(0, 0x10));
+        assert!(!split_selector_for(1, 0x11));
+        assert!(!split_selector_for(0, 0x11));
+        assert!(!split_selector_for(1, 0x10));
     }
 
     #[test]
